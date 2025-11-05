@@ -9,5 +9,12 @@ project(
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+add_compile_options(
+    -fsanitize=address
+)
+add_link_options(
+    -fsanitize=address
+)
+
 add_subdirectory(bin)
 add_subdirectory(lib)
