@@ -6,15 +6,14 @@
 
 #include "vtsh.h"
 
-int main(void) {
+int main() {
   char buffer[BUFFER_SIZE];
-  int is_interactive = isatty(STDIN_FILENO);
+
+  vtsh_init();
 
   while (1) {
-    if (is_interactive) {
-      printf("%s", vtsh_prompt());
-      (void)fflush(stdout);
-    }
+    printf("%s", vtsh_prompt());
+    (void)fflush(stdout);
 
     if (!read_line(buffer, BUFFER_SIZE)) {
       break;

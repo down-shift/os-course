@@ -9,7 +9,8 @@ typedef enum {
     CMD_AND,
     CMD_OR,
     CMD_SEQ,
-    CMD_BG
+    CMD_BG,
+    CMD_PIPE
 } cmd_operator_t;
 
 typedef struct {
@@ -25,4 +26,4 @@ int parse_line(char* line, char** args, int max_args);
 
 int execute(char* line);
 
-int execute_multiple(const char* input);
+void vtsh_init(void);
