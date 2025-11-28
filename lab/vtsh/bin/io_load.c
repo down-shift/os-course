@@ -28,15 +28,36 @@ static int parse_range(const char* str, off_t* start, off_t* end) {
   if (!dash) {
     return -1;
   }
-  int ok = 0;
-  long start_val = parse_long(str, &ok);
-  if (!ok || start_val < 0) {
+
+  size_t start_len = (size_t)(dash - str);
+  if (start_len == 0) {
     return -1;
   }
-  long end_val = parse_long(dash + 1, &ok);
+
+  char* start_str = strndup(str, start_len);
+  if (!start_str) {
+    return -1;
+  }
+  char* end_str = strdup(dash + 1);
+  if (!end_str) {
+    free(start_str);
+    return -1;
+  }
+
+  int ok = 0;
+  long start_val = parse_long(start_str, &ok);
+  if (!ok || start_val < 0) {
+    free(start_str);
+    free(end_str);
+    return -1;
+  }
+  long end_val = parse_long(end_str, &ok);
+  free(start_str);
+  free(end_str);
   if (!ok || end_val < 0) {
     return -1;
   }
+
   *start = (off_t)start_val;
   *end = (off_t)end_val;
   if (*end != 0 && *end < *start) {

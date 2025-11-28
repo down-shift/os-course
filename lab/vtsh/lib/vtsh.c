@@ -20,6 +20,18 @@ typedef struct {
   int value;
 } exit_status_t;
 
+typedef struct {
+  pid_t pid;
+  int job_id;
+  char done_msg[BUFFER_SIZE];
+  size_t done_len;
+  volatile sig_atomic_t active;
+} background_job_t;
+
+#define MAX_BG_JOBS 64
+
+static background_job_t bg_jobs[MAX_BG_JOBS];
+static int next_job_id = 1;
 
 /*
     вариант: proc-fork shell-bg cpu-dedup ema-replace-int
@@ -31,7 +43,7 @@ static long long now_ms() {
   if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
     return 0;
   }
-  return (long long)ts.tv_sec * 1000LL + (long long)(ts.tv_nsec / 1000000LL);
+  return ((long long)ts.tv_sec * 1000LL) + (long long)(ts.tv_nsec / 1000000LL);
 }
 
 static void print_duration_ms(long long elapsed_ms) {
@@ -41,17 +53,25 @@ static void print_duration_ms(long long elapsed_ms) {
   }
 }
 
-static void sigchld_handler(int signo) {
+static void sigchild_handler(int signo) {
   (void)signo;
   int status = 0;
-  while (waitpid(-1, &status, WNOHANG) > 0) {
+  pid_t pid = 0;
+  while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+    for (int i = 0; i < MAX_BG_JOBS; i++) {
+      if (bg_jobs[i].active && bg_jobs[i].pid == pid) {
+        (void)write(STDOUT_FILENO, bg_jobs[i].done_msg, bg_jobs[i].done_len);
+        bg_jobs[i].active = 0;
+        break;
+      }
+    }
   }
 }
 
 void vtsh_init() {
   struct sigaction sa;
   memset(&sa, 0, sizeof(sa));
-  sa.sa_handler = sigchld_handler;
+  sa.sa_handler = sigchild_handler;
   sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
   sigemptyset(&sa.sa_mask);
   (void)sigaction(SIGCHLD, &sa, NULL);
@@ -479,6 +499,56 @@ static int exec_cmd(char** args, redirection_info_t* redir, int is_child) {
   return -4;
 }
 
+static void build_command_repr(char** args, char* buffer, int buffer_size) {
+  int pos = 0;
+  for (int i = 0; args[i] != NULL && pos < buffer_size - 1; i++) {
+    int written = snprintf(buffer + pos, (size_t)(buffer_size - pos), "%s%s", i == 0 ? "" : " ", args[i]);
+    if (written < 0) {
+      break;
+    }
+    pos += written;
+    if (pos >= buffer_size - 1) {
+      break;
+    }
+  }
+  buffer[buffer_size - 1] = '\0';
+}
+
+static void add_background_job(pid_t pid, char** args) {
+  sigset_t mask;
+  sigset_t oldmask;
+  sigemptyset(&mask);
+  sigaddset(&mask, SIGCHLD);
+  (void)sigprocmask(SIG_BLOCK, &mask, &oldmask);
+  for (int i = 0; i < MAX_BG_JOBS; i++) {
+    if (!bg_jobs[i].active) {
+      bg_jobs[i].pid = pid;
+      bg_jobs[i].job_id = next_job_id++;
+      if (next_job_id < 1) {
+        next_job_id = 1;
+      }
+      char cmd_buffer[BUFFER_SIZE];
+      build_command_repr(args, cmd_buffer, BUFFER_SIZE);
+      int formatted = snprintf(bg_jobs[i].done_msg, BUFFER_SIZE,
+                               "[%d]  + %d done       %s\n",
+                               bg_jobs[i].job_id, bg_jobs[i].pid, cmd_buffer);
+      if (formatted < 0) {
+        bg_jobs[i].done_len = 0;
+      } else if (formatted >= BUFFER_SIZE) {
+        bg_jobs[i].done_len = BUFFER_SIZE - 1;
+      } else {
+        bg_jobs[i].done_len = (size_t)formatted;
+      }
+      bg_jobs[i].active = 1;
+      (void)sigprocmask(SIG_SETMASK, &oldmask, NULL);
+      (void)fprintf(stdout, "[%d] %d\n", bg_jobs[i].job_id, bg_jobs[i].pid);
+      (void)fflush(stdout);
+      return;
+    }
+  }
+  (void)sigprocmask(SIG_SETMASK, &oldmask, NULL);
+}
+
 static int run_cmd(char** args, int background) {
   if (!args[0]) {
     return 0;
@@ -501,6 +571,7 @@ static int run_cmd(char** args, int background) {
     return 1;
   }
   if (background) {
+    add_background_job(pid, args);
     return 0;
   }
   int status = 0;
